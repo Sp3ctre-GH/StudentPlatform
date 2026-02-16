@@ -1,0 +1,95 @@
+name: Multi-Platform Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Запускається при створенні тегу, наприклад v0.1
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        target: [apk, windows, web]
+        include:
+          - target: apk
+            os: ubuntu-latest
+          - target: windows
+            os: windows-latest
+          - target: web
+            os: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java (for Android)
+        if: matrix.target == 'apk'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Get dependencies
+        run: flutter pub get
+        working-directory: frontend
+
+      - name: Build Application
+        shell: bash
+        working-directory: frontend
+        run: |
+          if [ "${{ matrix.target }}" == "apk" ]; then
+            flutter build apk --release
+          elif [ "${{ matrix.target }}" == "windows" ]; then
+            flutter build windows --release
+          elif [ "${{ matrix.target }}" == "web" ]; then
+            flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+          fi
+
+      # Спеціальний крок для архівації Windows-збірки (тільки на Windows runner)
+      - name: Archive Windows Build
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path frontend/build/windows/x64/runner/Release/* -DestinationPath frontend/build/windows/x64/runner/Release/StudentPlatform-Windows.zip
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-build
+          path: |
+            frontend/build/app/outputs/flutter-apk/*.apk
+            frontend/build/windows/x64/runner/Release/*.zip
+            frontend/build/web/**
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.apk
+            artifacts/**/*.zip
+          name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
